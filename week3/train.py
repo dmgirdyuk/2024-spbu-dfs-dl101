@@ -162,22 +162,19 @@ def validation_step(
     return global_val_step
 
 
-EPSILON = 1e-9
+EPSILON = 1e-7
 
 
 class MulticlassDiceLoss(nn.Module):
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         probas = F.softmax(logits, dim=1)
 
-        # weights = torch.ones((1, targets.shape[1]))
-        # weights = weights / (torch.sum(targets, (0, 2, 3)) + EPSILON)
-
         intersection = (targets * probas).sum((0, 2, 3))
         cardinality = (targets + probas).sum((0, 2, 3))
 
-        dice_coefficient = (2.0 * intersection / (cardinality + EPSILON)).mean()
+        dice_coefficient = (2.0 * intersection + EPSILON) / (cardinality + EPSILON)
 
-        return 1.0 - dice_coefficient
+        return 1.0 - dice_coefficient.mean()
 
 
 @dataclass
