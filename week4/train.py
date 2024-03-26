@@ -196,12 +196,14 @@ LongTensorT = torch.LongTensor
 class IoUMetric(nn.Module):
     def __init__(
         self,
+        classes_num: int,
         ignore_index: int | None = None,
         reduction: str | None = None,
         class_weights: list[float] | None = None,
     ) -> None:
         super().__init__()
 
+        self.cls_num = classes_num
         self.ignore_index = ignore_index
         self.reduction = reduction
         self.class_weights = class_weights
@@ -209,35 +211,52 @@ class IoUMetric(nn.Module):
     @torch.no_grad()
     def forward(
         self,
-        output: torch.LongTensor,
-        target: torch.LongTensor,
+        output: torch.Tensor,
+        target: torch.Tensor,
     ) -> torch.Tensor:
         # from
         # https://github.com/qubvel/segmentation_models.pytorch/blob/master
         # /segmentation_models_pytorch/metrics/functional.py
 
-        batch_size, cls_num, height, width = output.shape
+        outputs = torch.argmax(output, dim=1).long()
+        targets = torch.argmax(target, dim=1).long()
+
+        batch_size, height, width = outputs.shape
 
         if self.ignore_index is not None:
-            ignore = cast(torch.Tensor, target == self.ignore_index)
-            output = torch.where(ignore, -1, output)
-            target = torch.where(ignore, -1, target)
+            ignore = cast(torch.Tensor, targets == self.ignore_index)
+            outputs = torch.where(ignore, -1, outputs)
+            targets = torch.where(ignore, -1, targets)
 
-        tp_count = cast(LongTensorT, torch.zeros(batch_size, cls_num, dtype=torch.long))
-        fp_count = cast(LongTensorT, torch.zeros(batch_size, cls_num, dtype=torch.long))
-        fn_count = cast(LongTensorT, torch.zeros(batch_size, cls_num, dtype=torch.long))
+        tp_count = cast(
+            LongTensorT, torch.zeros(batch_size, self.cls_num, dtype=torch.long)
+        )
+        fp_count = cast(
+            LongTensorT, torch.zeros(batch_size, self.cls_num, dtype=torch.long)
+        )
+        fn_count = cast(
+            LongTensorT, torch.zeros(batch_size, self.cls_num, dtype=torch.long)
+        )
 
         for i in range(batch_size):
-            target_i = target[i]
-            output_i = output[i]
+            target_i = targets[i]
+            output_i = outputs[i]
             mask = output_i == target_i
             matched = torch.where(mask, target_i, -1)
-            tp = torch.histc(matched.float(), bins=cls_num, min=0, max=cls_num - 1)
+            tp = torch.histc(
+                matched.float(), bins=self.cls_num, min=0, max=self.cls_num - 1
+            )
             fp = (
-                torch.histc(output_i.float(), bins=cls_num, min=0, max=cls_num - 1) - tp
+                torch.histc(
+                    output_i.float(), bins=self.cls_num, min=0, max=self.cls_num - 1
+                )
+                - tp
             )
             fn = (
-                torch.histc(target_i.float(), bins=cls_num, min=0, max=cls_num - 1) - tp
+                torch.histc(
+                    target_i.float(), bins=self.cls_num, min=0, max=self.cls_num - 1
+                )
+                - tp
             )
 
             tp_count[i] = tp.long()
