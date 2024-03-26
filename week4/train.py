@@ -30,6 +30,7 @@ def train(
     checkpointer: CheckpointSaver,
     tb_logger: SummaryWriter | None,  # tensorboard logger
     save_on_val: bool = True,  # saves checkpoint on the validation stage
+    show_every_x_batch: int = 30,
 ) -> None:
     model.train()
     global_train_step, global_val_step = 0, 0
@@ -50,6 +51,7 @@ def train(
             tb_logger=tb_logger,
             global_train_step=global_train_step,
             save_on_val=save_on_val,
+            show_every_x_batch=show_every_x_batch,
         )
 
         if val_dataloader is None:
@@ -81,6 +83,7 @@ def train_step(
     tb_logger: SummaryWriter | None,  # tensorboard logger
     global_train_step: int,
     save_on_val: bool = True,  # saves checkpoint on the validation stage
+    show_every_x_batch: int = 30,
 ) -> int:
     model.train()
 
@@ -97,7 +100,7 @@ def train_step(
         accelerator.backward(loss)
         optimizer.step()
 
-        if not batch_idx % 50:
+        if not batch_idx % show_every_x_batch:
             print(f"Batch train loss: {loss.item():.5f}")
             print(f"Batch train metric: {metric.item():.5f}")
 
@@ -193,20 +196,18 @@ LongTensorT = torch.LongTensor
 class IoUMetric(nn.Module):
     def __init__(
         self,
-        threshold: float,
         ignore_index: int | None = None,
         reduction: str | None = None,
         class_weights: list[float] | None = None,
     ) -> None:
         super().__init__()
 
-        self.threshold = threshold
         self.ignore_index = ignore_index
         self.reduction = reduction
         self.class_weights = class_weights
 
     @torch.no_grad()
-    def iou_score(
+    def forward(
         self,
         output: torch.LongTensor,
         target: torch.LongTensor,
@@ -278,21 +279,21 @@ def _compute_iou_metric(
         tp = cast(LongTensorT, tp.sum(0))
         fp = cast(LongTensorT, fp.sum(0))
         fn = cast(LongTensorT, fn.sum(0))
-        score = _iou_score(tp, fp, fn)
+        score = _handle_zero_division(_iou_score(tp, fp, fn))
         score = (score * class_weights).mean()
 
     elif reduction == "weighted":
         tp = cast(LongTensorT, tp.sum(0))
         fp = cast(LongTensorT, fp.sum(0))
         fn = cast(LongTensorT, fn.sum(0))
-        score = _iou_score(tp, fp, fn)
+        score = _handle_zero_division(_iou_score(tp, fp, fn))
         score = (score * class_weights).sum()
 
     elif reduction == "micro-imagewise":
         tp = cast(LongTensorT, tp.sum(1))
         fp = cast(LongTensorT, fp.sum(1))
         fn = cast(LongTensorT, fn.sum(1))
-        score = _iou_score(tp, fp, fn)
+        score = _handle_zero_division(_iou_score(tp, fp, fn))
         score = score.mean()
 
     elif reduction == "macro-imagewise" or reduction == "weighted-imagewise":
@@ -313,6 +314,13 @@ def _compute_iou_metric(
 
 def _iou_score(tp: LongTensorT, fp: LongTensorT, fn: LongTensorT) -> torch.Tensor:
     return tp / (tp + fp + fn)
+
+
+def _handle_zero_division(x: torch.Tensor) -> torch.Tensor:
+    nans = torch.isnan(x)
+    value = torch.tensor(0.0, dtype=x.dtype).to(x.device)
+    x = torch.where(nans, value, x)
+    return x
 
 
 @dataclass
